@@ -1,0 +1,11 @@
+# Local-only. No secrets are baked in -- the DigitalOcean token is supplied
+# per request via the X-DigitalOcean-Api-Key header, never via environment
+# variables (SOP SS3.1).
+services:
+  digitalocean-databases-mcp:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      MCP_HTTP_HOST: "0.0.0.0"
+      MCP_HTTP_PORT: "8080"
