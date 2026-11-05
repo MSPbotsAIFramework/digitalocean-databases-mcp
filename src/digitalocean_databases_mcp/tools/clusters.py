@@ -46,7 +46,8 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
                                                       limit=limit, page=page)
             return {"clusters": [_trim_summary(c) for c in items], "has_more": has_more}
 
-        return await run_tool(client_factory, call)
+        return await run_tool(client_factory, call, "do_list_clusters",
+                               {"tag_name": tag_name, "limit": limit, "page": page})
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
     async def do_get_cluster(cluster_id: str) -> str:
@@ -59,7 +60,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             body = await client.call("GET", f"/v2/databases/{cluster_id}")
             return _trim_detail((body or {}).get("database", {}))
 
-        return await run_tool(client_factory, call)
+        return await run_tool(client_factory, call, "do_get_cluster", {"cluster_id": cluster_id})
 
     @mcp.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=False))
     async def do_create_cluster(name: str, engine: str, region: str, size: str,
@@ -84,7 +85,9 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             resp = await client.call("POST", "/v2/databases", json=body)
             return _trim_detail((resp or {}).get("database", {}))
 
-        return await run_tool(client_factory, call)
+        return await run_tool(client_factory, call, "do_create_cluster",
+                               {"name": name, "engine": engine, "region": region, "size": size,
+                                "num_nodes": num_nodes, "version": version, "tags": tags})
 
     @mcp.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=True))
     async def do_resize_cluster(cluster_id: str, size: str, num_nodes: int) -> str:
@@ -99,7 +102,8 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
                                json={"size": size, "num_nodes": num_nodes})
             return {"cluster_id": cluster_id, "resize_accepted": True}
 
-        return await run_tool(client_factory, call)
+        return await run_tool(client_factory, call, "do_resize_cluster",
+                               {"cluster_id": cluster_id, "size": size, "num_nodes": num_nodes})
 
     @mcp.tool(annotations=ToolAnnotations(destructiveHint=True, idempotentHint=True))
     async def do_destroy_cluster(cluster_id: str) -> str:
@@ -113,7 +117,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             await client.call("DELETE", f"/v2/databases/{cluster_id}")
             return {"cluster_id": cluster_id, "deleted": True}
 
-        return await run_tool(client_factory, call)
+        return await run_tool(client_factory, call, "do_destroy_cluster", {"cluster_id": cluster_id})
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
     async def do_list_cluster_options() -> str:
@@ -123,4 +127,4 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             body = await client.call("GET", "/v2/databases/options")
             return (body or {}).get("options", body)
 
-        return await run_tool(client_factory, call)
+        return await run_tool(client_factory, call, "do_list_cluster_options", {})

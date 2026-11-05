@@ -20,7 +20,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             body = await client.call("GET", f"/v2/databases/{cluster_id}/users")
             return {"users": strip_passwords((body or {}).get("users", []))}
 
-        return await run_tool(client_factory, call)
+        return await run_tool(client_factory, call, "do_list_users", {"cluster_id": cluster_id})
 
     @mcp.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=False))
     async def do_add_user(cluster_id: str, username: str, mysql_auth_plugin: str | None = None) -> str:
@@ -38,7 +38,9 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             body = await client.call("POST", f"/v2/databases/{cluster_id}/users", json=payload)
             return strip_passwords((body or {}).get("user", {"name": username}))
 
-        return await run_tool(client_factory, call)
+        return await run_tool(client_factory, call, "do_add_user",
+                               {"cluster_id": cluster_id, "username": username,
+                                "mysql_auth_plugin": mysql_auth_plugin})
 
     @mcp.tool(annotations=ToolAnnotations(destructiveHint=True, idempotentHint=True))
     async def do_remove_user(cluster_id: str, username: str) -> str:
@@ -52,4 +54,5 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             await client.call("DELETE", f"/v2/databases/{cluster_id}/users/{username}")
             return {"cluster_id": cluster_id, "username": username, "deleted": True}
 
-        return await run_tool(client_factory, call)
+        return await run_tool(client_factory, call, "do_remove_user",
+                               {"cluster_id": cluster_id, "username": username})

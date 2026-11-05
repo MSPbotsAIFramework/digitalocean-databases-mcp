@@ -18,7 +18,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             body = await client.call("GET", f"/v2/databases/{cluster_id}/pools")
             return {"pools": (body or {}).get("pools", [])}
 
-        return await run_tool(client_factory, call)
+        return await run_tool(client_factory, call, "do_list_connection_pools", {"cluster_id": cluster_id})
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
     async def do_list_firewall_rules(cluster_id: str) -> str:
@@ -31,7 +31,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             body = await client.call("GET", f"/v2/databases/{cluster_id}/firewall")
             return {"rules": (body or {}).get("rules", [])}
 
-        return await run_tool(client_factory, call)
+        return await run_tool(client_factory, call, "do_list_firewall_rules", {"cluster_id": cluster_id})
 
     @mcp.tool(annotations=ToolAnnotations(destructiveHint=True, idempotentHint=True))
     async def do_update_firewall_rules(cluster_id: str, rules: list[dict[str, str]]) -> str:
@@ -48,4 +48,5 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             await client.call("PUT", f"/v2/databases/{cluster_id}/firewall", json={"rules": rules})
             return {"cluster_id": cluster_id, "rules": rules}
 
-        return await run_tool(client_factory, call)
+        return await run_tool(client_factory, call, "do_update_firewall_rules",
+                               {"cluster_id": cluster_id, "rules": rules})

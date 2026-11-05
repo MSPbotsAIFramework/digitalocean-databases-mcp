@@ -6,9 +6,12 @@ would mix one tenant's token into another tenant's request (SOP SS3.3/SS3.4).
 """
 
 import asyncio
+import time
 from typing import Any
 
 import httpx
+
+from digitalocean_databases_mcp.observability import log_do_request
 
 MAX_RETRIES = 3
 BACKOFF_SECONDS = 1.0
@@ -57,24 +60,34 @@ class DOClient:
         await self.aclose()
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        """One outbound call with bounded retry+backoff on 429/5xx (SOP SS5)."""
+        """One outbound call with bounded retry+backoff on 429/5xx (SOP SS5).
+
+        Every attempt -- including retries -- gets its own structured
+        `do_request` log line (path, status code, latency; never headers or
+        body) so a retry storm or a slow upstream is visible per-request,
+        not just on the final outcome (SOP SS6/SS14).
+        """
         last_exc: Exception | None = None
         for attempt in range(MAX_RETRIES + 1):
+            start = time.perf_counter()
             try:
                 resp = await self._client.request(method, path, **kwargs)
             except httpx.TimeoutException as exc:
                 last_exc = exc
+                log_do_request(method, path, None, (time.perf_counter() - start) * 1000, error="timeout")
                 if attempt == MAX_RETRIES:
                     raise DOApiError(0, f"Timed out calling DigitalOcean API: {exc}") from exc
                 await asyncio.sleep(BACKOFF_SECONDS * (2**attempt))
                 continue
             except httpx.TransportError as exc:
                 last_exc = exc
+                log_do_request(method, path, None, (time.perf_counter() - start) * 1000, error="transport_error")
                 if attempt == MAX_RETRIES:
                     raise DOApiError(0, f"Network error calling DigitalOcean API: {exc}") from exc
                 await asyncio.sleep(BACKOFF_SECONDS * (2**attempt))
                 continue
 
+            log_do_request(method, path, resp.status_code, (time.perf_counter() - start) * 1000)
             if resp.status_code == 429 or resp.status_code >= 500:
                 if attempt == MAX_RETRIES:
                     return resp

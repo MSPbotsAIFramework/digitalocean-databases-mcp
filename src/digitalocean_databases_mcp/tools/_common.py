@@ -1,10 +1,12 @@
 """Shared helpers used by every tools/<resource>.py module."""
 
 import json
+import time
 from typing import Any, Awaitable, Callable
 
 from digitalocean_databases_mcp.api_client import DOApiError, DOClient
 from digitalocean_databases_mcp.errors import envelope, not_configured, status_to_code
+from digitalocean_databases_mcp.observability import log_tool_call
 
 MAX_RESULT_CHARS = 20_000
 
@@ -29,21 +31,33 @@ def dumps(obj: object) -> str:
     )
 
 
-async def run_tool(client_factory: ClientFactory, fn: Callable[[DOClient], Awaitable[object]]) -> str:
+async def run_tool(
+    client_factory: ClientFactory,
+    fn: Callable[[DOClient], Awaitable[object]],
+    tool_name: str,
+    args: dict[str, Any],
+) -> str:
     """Build a request-scoped client, run `fn`, map any DOApiError to the error envelope.
 
     Tools never raise -- every outcome, success or failure, comes back as a
-    JSON string (SOP SS4.1).
+    JSON string (SOP SS4.1). Always emits one structured `tool_call` log line
+    (tool name, redacted arg summary, latency, error code if any) regardless
+    of how `fn` finishes (SOP SS6/SS14).
     """
     client = client_factory()
+    start = time.perf_counter()
     if client is None:
+        log_tool_call(tool_name, args, (time.perf_counter() - start) * 1000, "not_configured")
         return not_configured()
+    error_code: str | None = None
     try:
         async with client:
             result = await fn(client)
     except DOApiError as exc:
-        code = status_to_code(exc.status_code) if exc.status_code else "upstream_error"
-        return envelope(code, exc.message)
+        error_code = status_to_code(exc.status_code) if exc.status_code else "upstream_error"
+        return envelope(error_code, exc.message)
+    finally:
+        log_tool_call(tool_name, args, (time.perf_counter() - start) * 1000, error_code)
     return dumps(result)
 
 

@@ -18,7 +18,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             body = await client.call("GET", f"/v2/databases/{cluster_id}/backups")
             return {"backups": (body or {}).get("backups", [])}
 
-        return await run_tool(client_factory, call)
+        return await run_tool(client_factory, call, "do_list_backups", {"cluster_id": cluster_id})
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
     async def do_get_cluster_config(cluster_id: str) -> str:
@@ -31,7 +31,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             body = await client.call("GET", f"/v2/databases/{cluster_id}/config")
             return (body or {}).get("config", {})
 
-        return await run_tool(client_factory, call)
+        return await run_tool(client_factory, call, "do_get_cluster_config", {"cluster_id": cluster_id})
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
     async def do_list_replicas(cluster_id: str) -> str:
@@ -44,4 +44,4 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             body = await client.call("GET", f"/v2/databases/{cluster_id}/replicas")
             return {"replicas": (body or {}).get("replicas", [])}
 
-        return await run_tool(client_factory, call)
+        return await run_tool(client_factory, call, "do_list_replicas", {"cluster_id": cluster_id})

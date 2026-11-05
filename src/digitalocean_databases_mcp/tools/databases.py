@@ -18,7 +18,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             body = await client.call("GET", f"/v2/databases/{cluster_id}/dbs")
             return {"databases": (body or {}).get("dbs", [])}
 
-        return await run_tool(client_factory, call)
+        return await run_tool(client_factory, call, "do_list_databases", {"cluster_id": cluster_id})
 
     @mcp.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=False))
     async def do_add_database(cluster_id: str, db_name: str) -> str:
@@ -31,7 +31,8 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             body = await client.call("POST", f"/v2/databases/{cluster_id}/dbs", json={"name": db_name})
             return (body or {}).get("db", {"name": db_name})
 
-        return await run_tool(client_factory, call)
+        return await run_tool(client_factory, call, "do_add_database",
+                               {"cluster_id": cluster_id, "db_name": db_name})
 
     @mcp.tool(annotations=ToolAnnotations(destructiveHint=True, idempotentHint=True))
     async def do_remove_database(cluster_id: str, db_name: str) -> str:
@@ -45,4 +46,5 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             await client.call("DELETE", f"/v2/databases/{cluster_id}/dbs/{db_name}")
             return {"cluster_id": cluster_id, "db_name": db_name, "deleted": True}
 
-        return await run_tool(client_factory, call)
+        return await run_tool(client_factory, call, "do_remove_database",
+                               {"cluster_id": cluster_id, "db_name": db_name})
