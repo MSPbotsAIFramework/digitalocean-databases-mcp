@@ -36,4 +36,33 @@ Re-reading the same design commitment and SOP bucket that round 1's finding quot
 
 2. [must-fix] `src/digitalocean_databases_mcp/observability.py:25-27` (`redact_args`), `:35` (`args=redact_args(args)`) — the arg summary logged with every `tool_call` is not truncated. The tech design's "Non-functional > Observability" section (`docs/tickets/PRD-21339.md:186`) specifically commits to a *"truncated arg summary"*, not just a redacted one; `redact_args` only drops credential-shaped keys and returns the rest of the dict verbatim, with no size cap. Tools that take list/dict arguments log them in full: `do_update_firewall_rules(cluster_id, rules: list[dict[str, str]])` (`tools/network.py`) and `do_create_cluster(..., tags: list[str] | None)` (`tools/clusters.py`) both pass the raw list straight into `log_tool_call`'s `args`, so a caller passing a large rule set or tag list produces an unbounded log line — exactly what "truncated" was meant to bound against, and the kind of thing that causes production log-pipeline problems (oversized lines dropped or truncated mid-JSON by the log shipper) during an incident, which is when this logging is supposed to help. Fix: cap the serialized args (e.g. JSON-dump then truncate to a fixed length with a marker, mirroring the existing `MAX_RESULT_CHARS` pattern in `tools/_common.py:10`) before passing them to `log_tool_call`.
 
-### Fixes            ← round 3 appends here if there is a round 3
+### Fixes
+
+1. [must-fix #1] `src/digitalocean_databases_mcp/observability.py`: added `new_request_id()` (`uuid4().hex[:12]`); `log_tool_call` and `log_do_request` now take a required `request_id` kwarg emitted as the first field after `event`. `tools/_common.py`'s `run_tool` generates one `request_id` per invocation and sets `client.request_id` on the freshly-constructed `DOClient` before `async with client`, covering both the `not_configured` early return and the normal/error `finally` path. `api_client.py`'s `DOClient.__init__` now carries `self.request_id: str | None = None`; all three `log_do_request` call sites in `_request` (timeout, transport error, response) pass `request_id=self.request_id`, so a retry storm's lines all share the id of the `tool_call` that triggered them. `DOClient` is still built fresh per tool invocation by `server.py`'s `client_factory()` (`return DOClient(token, settings.do_api_base_url)`), so the instance attribute never leaks across tenants or concurrent calls.
+
+   Verification: `tests/test_observability.py` asserts `do_requests[i]["request_id"] == tool_calls[0]["request_id"]` on the success path, the mapped-error path, and the 4-attempt retry path (`test_transport_failure_logs_do_request_without_status_code`, asserts exactly one distinct `request_id` across all 4 lines). Live re-check: a real `do_list_clusters` call against a placeholder token produced matching `request_id":"78516b97242c"` on both the `do_request` and `tool_call` lines.
+
+2. [must-fix #2] `observability.py`: `redact_args` now caps each remaining argument value's logged length (`_MAX_ARG_VALUE_CHARS = 200`) after dropping credential-shaped keys — non-string values are JSON-dumped first, then truncated with an `...<truncated N more chars>` marker, mirroring the existing `MAX_RESULT_CHARS` pattern in `tools/_common.py`. This bounds `do_update_firewall_rules`' `rules` and `do_create_cluster`'s `tags`, the two unbounded list arguments round 2 named.
+
+   Verification: `test_redact_args_truncates_oversized_values` — a 50-item `rules` list collapses to a capped string strictly shorter than the untruncated JSON, with a `"truncated"` marker; `cluster_id` passes through unchanged.
+
+   Tests: `uv run pytest -q` 35/35 (34 pre-existing + 1 new: `test_redact_args_truncates_oversized_values`; the three correlation tests above were updated in place, not added). Commit: `4a08267` on `dev/PRD-21339` (branch head at review round 2 was `784183e`).
+
+## Round 3 · 2026-11-05 · reviewed dev/PRD-21339 7911349 (base main @ 1b998d0)
+
+Status: frozen @ 7911349
+
+Verdict: approved
+
+### Round 2 fixes re-checked
+
+Independently re-read `observability.py`, `api_client.py`, and `tools/_common.py` against both round 2 findings (not just the `[DEV]` stub's summary):
+
+- Must-fix 1 (request-id correlation): confirmed `new_request_id()` is called once per `run_tool` invocation and the same id is set on `client.request_id` before any `DOClient._request` call, then read back by all three `log_do_request` call sites (timeout, transport error, response) in `api_client.py:81,88-90,96`. `server.py:104`'s `client_factory()` builds a fresh `DOClient` per call, so the instance attribute cannot bleed across tenants/concurrent requests. Resolved.
+- Must-fix 2 (truncated arg summary): confirmed `redact_args` now calls `_truncate_value` on every remaining value after credential-key dropping, capping each at 200 chars with an overflow marker; both named call sites (`do_update_firewall_rules`'s `rules`, `do_create_cluster`'s `tags`) go through `redact_args` before `log_tool_call`. Resolved.
+
+Independent verification run by the reviewer (not just re-stating the `[DEV]` stub): `uv sync && uv run pytest -q` on `HEAD` (`7911349`) → `35 passed`, matching the stub's claim. Chinese-character scan (`grep -rnP '[\x{4e00}-\x{9fff}]' --exclude-dir=.git --exclude-dir=.venv .`) over the full tree, excluding `docs/tickets/PRD-21339-review.md` (which quotes the Chinese-language SOP verbatim for citation and is the review leg's own record) → no hits. README's `## MSPbots Connector` … `## Authentication headers` section diffed byte-for-byte against `reference/readme-connector-section.md` → identical (unchanged this round). `gitleaks` not installed on this host, skipped per `gates.md` ("有就跑").
+
+### Findings
+
+None — no must-fix or suggestion. Both round 2 must-fix items are correctly and completely resolved, with test coverage, and nothing else changed.
