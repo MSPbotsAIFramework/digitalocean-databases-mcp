@@ -1,0 +1,15 @@
+# PRD-21339 · Code review
+
+## Round 1 · 2026-11-05 · reviewed dev/PRD-21339 b48f699 (base main @ 1b998d0)
+
+Verdict: changes requested
+
+### Findings
+
+1. [must-fix] `src/digitalocean_databases_mcp/tools/_common.py:32` (`run_tool`), `src/digitalocean_databases_mcp/api_client.py:59` (`DOClient._request`) — no structured observability logging is implemented anywhere in the service, even though the tech design's "Non-functional > Observability" section (`docs/tickets/PRD-21339.md:186`) commits to *"structured JSON logs per request -- tool name, truncated arg summary (cluster id ok to log, token/credential never), DigitalOcean path + status code, latency, error `code` if any (SOP §6)"*, and the SOP's mandatory §6 ("日志必须谨慎...用结构化日志...记录: 工具名、入参摘要、你的 API 路径与状态码、耗时、错误 code") plus the §14 delivery checklist both require it ("结构化日志带 request-id; 不打印凭据、Header 中的 token、以及返回的敏感业务数据"). `grep -rn 'log\|Logger\|logging' src/` returns zero hits outside unrelated docstring/comment text ("logical databases"). The only logging the running service produces is uvicorn's default access log (method/path/status on `/mcp` itself), which carries none of: tool name, the DigitalOcean path/status code it called, latency, or the mapped error code -- so there is currently no way to trace what a given tenant's agent actually did against DigitalOcean, or to diagnose a production incident (which tool ran, which DO endpoint it hit, why it failed).
+
+   The Self-test section's "SOP §14 checklist" paragraph (`docs/tickets/PRD-21339.md:344-351`) states the "Container and sensitive-info items are satisfied per steps 3-4 above" and otherwise claims the checklist is covered, but step 3/4 are only the secret scan and the docker build -- neither addresses the "日志与可观测性" (§6) half of that checklist bucket, which is silently unmet rather than called out as a gap.
+
+   Fix: add structured per-tool-call logging (e.g. wrapped around `run_tool` in `tools/_common.py` and/or `DOClient._request` in `api_client.py`) emitting at minimum: tool name, a redacted argument summary, the DigitalOcean request path and status code, latency, and the mapped error code on failure -- with the bearer token/credential never included, consistent with how the rest of this codebase already treats the credential.
+
+### Fixes
