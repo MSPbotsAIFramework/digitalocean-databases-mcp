@@ -41,6 +41,10 @@ class DOClient:
     """One instance per MCP request. Holds the caller's own bearer token."""
 
     def __init__(self, token: str, base_url: str, transport: httpx.AsyncBaseTransport | None = None):
+        # Set by `run_tool` right after construction, before any request is
+        # made, so every `do_request` log line this client emits can be tied
+        # back to the `tool_call` line for the same invocation (SOP SS6/SS14).
+        self.request_id: str | None = None
         # `transport` has no default beyond httpx's own: it exists so tests can
         # substitute httpx.MockTransport instead of hitting the network.
         self._client = httpx.AsyncClient(
@@ -74,20 +78,22 @@ class DOClient:
                 resp = await self._client.request(method, path, **kwargs)
             except httpx.TimeoutException as exc:
                 last_exc = exc
-                log_do_request(method, path, None, (time.perf_counter() - start) * 1000, error="timeout")
+                log_do_request(method, path, None, (time.perf_counter() - start) * 1000, error="timeout", request_id=self.request_id)
                 if attempt == MAX_RETRIES:
                     raise DOApiError(0, f"Timed out calling DigitalOcean API: {exc}") from exc
                 await asyncio.sleep(BACKOFF_SECONDS * (2**attempt))
                 continue
             except httpx.TransportError as exc:
                 last_exc = exc
-                log_do_request(method, path, None, (time.perf_counter() - start) * 1000, error="transport_error")
+                log_do_request(
+                    method, path, None, (time.perf_counter() - start) * 1000, error="transport_error", request_id=self.request_id
+                )
                 if attempt == MAX_RETRIES:
                     raise DOApiError(0, f"Network error calling DigitalOcean API: {exc}") from exc
                 await asyncio.sleep(BACKOFF_SECONDS * (2**attempt))
                 continue
 
-            log_do_request(method, path, resp.status_code, (time.perf_counter() - start) * 1000)
+            log_do_request(method, path, resp.status_code, (time.perf_counter() - start) * 1000, request_id=self.request_id)
             if resp.status_code == 429 or resp.status_code >= 500:
                 if attempt == MAX_RETRIES:
                     return resp

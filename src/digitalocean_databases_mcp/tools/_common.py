@@ -6,7 +6,7 @@ from typing import Any, Awaitable, Callable
 
 from digitalocean_databases_mcp.api_client import DOApiError, DOClient
 from digitalocean_databases_mcp.errors import envelope, not_configured, status_to_code
-from digitalocean_databases_mcp.observability import log_tool_call
+from digitalocean_databases_mcp.observability import log_tool_call, new_request_id
 
 MAX_RESULT_CHARS = 20_000
 
@@ -41,14 +41,18 @@ async def run_tool(
 
     Tools never raise -- every outcome, success or failure, comes back as a
     JSON string (SOP SS4.1). Always emits one structured `tool_call` log line
-    (tool name, redacted arg summary, latency, error code if any) regardless
-    of how `fn` finishes (SOP SS6/SS14).
+    (request id, tool name, redacted+truncated arg summary, latency, error
+    code if any) regardless of how `fn` finishes (SOP SS6/SS14). The same
+    request id is set on `client` so every `do_request` line the call makes
+    (including retries) carries it too, tying the whole invocation together.
     """
     client = client_factory()
+    request_id = new_request_id()
     start = time.perf_counter()
     if client is None:
-        log_tool_call(tool_name, args, (time.perf_counter() - start) * 1000, "not_configured")
+        log_tool_call(tool_name, args, (time.perf_counter() - start) * 1000, "not_configured", request_id=request_id)
         return not_configured()
+    client.request_id = request_id
     error_code: str | None = None
     try:
         async with client:
@@ -57,7 +61,7 @@ async def run_tool(
         error_code = status_to_code(exc.status_code) if exc.status_code else "upstream_error"
         return envelope(error_code, exc.message)
     finally:
-        log_tool_call(tool_name, args, (time.perf_counter() - start) * 1000, error_code)
+        log_tool_call(tool_name, args, (time.perf_counter() - start) * 1000, error_code, request_id=request_id)
     return dumps(result)
 
 
