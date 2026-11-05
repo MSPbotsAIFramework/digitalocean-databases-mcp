@@ -1,0 +1,157 @@
+[
+  {
+    "id": "TC1",
+    "ac": "AC1",
+    "text": "Given no X-DigitalOcean-Api-Key header is sent, When any tool is called over POST /mcp, Then the server returns HTTP 401 naming the required header, and zero outbound calls are made to api.digitalocean.com",
+    "type": "manual",
+    "steps": [
+      "Start the service locally (docker-compose up or uv run python -m digitalocean_databases_mcp)",
+      "curl -X POST http://localhost:8080/mcp -H 'Accept: application/json, text/event-stream' -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}'",
+      "Inspect the mocked/real outbound HTTP client call count for the duration of the request"
+    ],
+    "expect": "Response status 401; body text mentions X-DigitalOcean-Api-Key; outbound call count to api.digitalocean.com is 0",
+    "result": "pass",
+    "evidence": "local server (MCP_HTTP_PORT=18080), 2026-11-04: `curl -i -X POST http://127.0.0.1:18080/mcp -H 'Accept: application/json, text/event-stream' -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}'` -> `HTTP/1.1 401 Unauthorized` body `{\"error\":{\"code\":\"unauthorized\",\"message\":\"Missing required header: X-DigitalOcean-Api-Key\"}}`. CredentialMiddleware returns the 401 before calling `self.app(...)`, so the downstream MCP app (and therefore any DigitalOcean call) never runs on this path -- also asserted directly in tests/test_middleware.py::test_missing_header_returns_401_and_never_calls_downstream (`uv run pytest`: 27 passed)."
+  },
+  {
+    "id": "TC2",
+    "ac": "AC2",
+    "text": "Given a valid token, When do_list_clusters is called, Then every returned item has id/name/engine/status/region and none contains a password-shaped field",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_list_clusters_shape_has_no_password_field"],
+    "result": "pass",
+    "evidence": "uv run pytest -q: 27 passed, includes this test (mocked DigitalOcean response with a connection.password field; asserted the trimmed cluster summary has no password key)."
+  },
+  {
+    "id": "TC3",
+    "ac": "AC3",
+    "text": "Given cluster_id belonging to token A, When do_get_cluster is called with token B, Then the tool returns not_found rather than token A's cluster data",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_get_cluster_isolated_per_token"],
+    "result": "pass",
+    "evidence": "uv run pytest -q: 27 passed. Mocked DigitalOcean API returns 404 for a cluster id not owned by the presented token (DigitalOcean's own scoping); asserted the tool surfaces error.code=not_found, not a crash or another tenant's data."
+  },
+  {
+    "id": "TC4",
+    "ac": "AC4",
+    "text": "Given the DigitalOcean API mock returns 429 with Retry-After, When a tool calls it, Then the client backs off and retries, and a still-429 result maps to error.code=rate_limited with retryable=true",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_429_maps_to_rate_limited_and_backs_off"],
+    "result": "pass",
+    "evidence": "uv run pytest -q: 27 passed. Mock transport always returns 429 Retry-After:0; test asserts more than one outbound call was made (proving the retry loop ran) and the final tool result is {\"error\":{\"code\":\"rate_limited\",\"message\":\"too many requests\",\"retryable\":true}}."
+  },
+  {
+    "id": "TC5",
+    "ac": "AC5",
+    "text": "Given a cluster_id that does not exist, When a cluster-scoped tool is called, Then the result is {\"error\":{\"code\":\"not_found\",...}} and not an unhandled exception or 500",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_unknown_cluster_id_maps_to_not_found"],
+    "result": "pass",
+    "evidence": "uv run pytest -q: 27 passed. Also exercised live: `tools/call do_list_clusters` with an invalid token against the real api.digitalocean.com returned the structured envelope {\"error\":{\"code\":\"unauthorized\",\"message\":\"Unable to authenticate you\",\"retryable\":false}} rather than a crash, confirming the same error-mapping path end to end."
+  },
+  {
+    "id": "TC6",
+    "ac": "AC6",
+    "text": "Given required fields (name, engine, region, size), When do_create_cluster is called against a mocked 201, Then the tool result has status creating",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_create_cluster_returns_creating_status"],
+    "result": "pass",
+    "evidence": "uv run pytest -q: 27 passed."
+  },
+  {
+    "id": "TC7",
+    "ac": "AC7",
+    "text": "do_destroy_cluster's declared tool schema has exactly one required parameter (cluster_id, string) and no tag/filter/bulk parameter",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_destroy_cluster_schema_is_single_explicit_id_only"],
+    "result": "pass",
+    "evidence": "uv run pytest -q: 27 passed. Asserted against the live tools/list inputSchema: properties == {cluster_id}, required == [cluster_id]. Also confirmed over HTTP: `tools/list` response for do_destroy_cluster shows inputSchema.properties == {\"cluster_id\": {...}} only."
+  },
+  {
+    "id": "TC8",
+    "ac": "AC8",
+    "text": "do_update_firewall_rules's tool description explicitly states it replaces the entire trusted-sources list; calling it with a 1-item list after existing rules leaves exactly 1 rule, not a union",
+    "type": "auto",
+    "tests": [
+      "tests/test_tools.py::test_update_firewall_rules_description_states_full_replace",
+      "tests/test_tools.py::test_update_firewall_rules_is_full_replace_not_merge"
+    ],
+    "result": "pass",
+    "evidence": "uv run pytest -q: 27 passed. Description contains 'replaces'/'merge'; behavior test asserts exactly one outbound PUT (no preceding GET-and-merge) with body == the given rules list verbatim."
+  },
+  {
+    "id": "TC9",
+    "ac": "AC9",
+    "text": "Given two concurrent requests with two different bearer tokens, When each calls a tool at the same time, Then each response reflects only its own token's mocked data, with no cross-request leakage",
+    "type": "auto",
+    "tests": ["tests/test_middleware.py::test_concurrent_requests_do_not_leak_credentials_or_data"],
+    "result": "pass",
+    "evidence": "uv run pytest -q: 27 passed, including this test parametrized x3 (asyncio.gather of two concurrent ASGI requests through CredentialMiddleware with different tokens; each response echoes only its own token). No flake observed across repeated local runs."
+  },
+  {
+    "id": "TC10",
+    "ac": "AC10",
+    "text": "Given a mocked 75-item cluster list and no explicit limit, When do_list_clusters is called, Then the result has at most 50 items and has_more=true; given limit=500, the effective per_page sent upstream is clamped to 200",
+    "type": "auto",
+    "tests": [
+      "tests/test_tools.py::test_list_clusters_default_limit_is_50_with_has_more",
+      "tests/test_tools.py::test_list_clusters_limit_is_hard_capped_at_200"
+    ],
+    "result": "pass",
+    "evidence": "uv run pytest -q: 27 passed."
+  },
+  {
+    "id": "TC11",
+    "ac": "AC2",
+    "text": "Given a real DigitalOcean account with at least one cluster, When tools/list then tools/call do_list_clusters is run over HTTP with a real token, Then the response lists that account's actual cluster(s)",
+    "type": "manual",
+    "steps": [
+      "Obtain a real DigitalOcean personal access token from a test/trial account (Control Panel -> Account -> API -> Tokens)",
+      "curl -X POST http://localhost:8080/mcp -H 'Accept: application/json, text/event-stream' -H 'X-DigitalOcean-Api-Key: <token>' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"do_list_clusters\",\"arguments\":{}}}'"
+    ],
+    "expect": "200 response whose body lists the account's real clusters (or an empty array if the account has none) -- not an error",
+    "result": "blocked",
+    "evidence": "needs a real DigitalOcean vendor account; not available at dev time. Partially covered: the same request with an invalid placeholder token, run live against the real api.digitalocean.com on 2026-11-04, returned 200 at the MCP layer and a well-formed error envelope ({\"error\":{\"code\":\"unauthorized\",\"message\":\"Unable to authenticate you\",\"retryable\":false}}) rather than a crash -- confirms the live request path works end to end; only the real cluster data is unverified. Does not block merge/registration/INT publish per SOP."
+  },
+  {
+    "id": "TC12",
+    "ac": "AC6",
+    "text": "Given a real DigitalOcean account, When do_create_cluster (smallest size) is called then do_destroy_cluster on the same id, Then both round-trip successfully against the live API",
+    "type": "manual",
+    "steps": [
+      "Using a real token, call do_create_cluster with the smallest available size/region from do_list_cluster_options",
+      "Poll do_get_cluster until status is online (or accept status creating as sufficient evidence the call was accepted)",
+      "Call do_destroy_cluster with the returned cluster id",
+      "Call do_get_cluster again and confirm not_found"
+    ],
+    "expect": "Cluster is created (visible via do_get_cluster) and then destroyed (subsequent do_get_cluster returns not_found)",
+    "result": "blocked",
+    "evidence": "needs a real DigitalOcean vendor account; creating/destroying a real cluster also has a billing implication, so this is explicitly deferred to whoever owns a funded test account. Does not block merge/registration/INT publish."
+  },
+  {
+    "id": "TC13",
+    "ac": "AC1",
+    "text": "A raw curl tools/list request without the credential header is rejected by the running Starlette middleware itself (not just a unit-test mock)",
+    "type": "manual",
+    "steps": [
+      "Start the service locally",
+      "curl -i -X POST http://localhost:8080/mcp -H 'Accept: application/json, text/event-stream' -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}'"
+    ],
+    "expect": "HTTP/1.1 401 response",
+    "result": "pass",
+    "evidence": "local server (MCP_HTTP_PORT=18080), 2026-11-04: response was `HTTP/1.1 401 Unauthorized` with body `{\"error\":{\"code\":\"unauthorized\",\"message\":\"Missing required header: X-DigitalOcean-Api-Key\"}}`; server log line `INFO: 127.0.0.1:36048 - \"POST /mcp HTTP/1.1\" 401 Unauthorized`."
+  },
+  {
+    "id": "TC14",
+    "ac": "AC9",
+    "text": "A raw curl tools/list request WITH a credential header succeeds with 200, not 400, confirming stateless_http=True is actually wired",
+    "type": "manual",
+    "steps": [
+      "Start the service locally",
+      "curl -i -X POST http://localhost:8080/mcp -H 'Accept: application/json, text/event-stream' -H 'X-DigitalOcean-Api-Key: placeholder-token' -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}'"
+    ],
+    "expect": "HTTP/1.1 200 response (not 400), per the SOP 1.3 self-check for stateless_http",
+    "result": "pass",
+    "evidence": "local server (MCP_HTTP_PORT=18080), 2026-11-04: response was `HTTP/1.1 200 OK`, `content-type: text/event-stream`, body `event: message\\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[...18 tools...]}}`; server log line `INFO: 127.0.0.1:36062 - \"POST /mcp HTTP/1.1\" 200 OK`."
+  }
+]
